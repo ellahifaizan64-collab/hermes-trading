@@ -35,5 +35,5 @@ def main():
 
 if __name__ == "__main__":
     # Ensure we are in the correct directory execution path
-    os.chdir(os.path.expanduser('~/hermes-trading'))
+    os.chdir('/app')
     main()
