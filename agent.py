@@ -4,7 +4,7 @@ import json
 import urllib.request
 import random
 
-# Global hyperparameter state that the system autonomously optimizes over time
+# Global strategy parameters that the bot will automatically tune over time
 CONFIG = {
     "short_window": 5,
     "long_window": 20,
@@ -20,19 +20,6 @@ def get_alpaca_headers():
         "APCA-API-SECRET-KEY": api_secret,
         "Content-Type": "application/json"
     }
-
-def get_latest_price(symbol):
-    data_symbol = "BTC/USD" if "BTC" in symbol else symbol
-    url = f"https://data.alpaca.markets/v1beta3/crypto/us/latest/trades?symbols={data_symbol}"
-    headers = get_alpaca_headers()
-    try:
-        req = urllib.request.Request(url, headers=headers, method='GET')
-        with urllib.request.urlopen(req) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            return float(res_data["trades"][data_symbol]["p"])
-    except Exception as e:
-        print(f"⚠️ Price Fetch Error: {e}")
-        return None
 
 def get_crypto_bars(symbol, limit=100):
     data_symbol = "BTC/USD" if "BTC" in symbol else symbol
@@ -112,8 +99,7 @@ def simulate_strategy(bars, short_w, long_w, rsi_b, rsi_s):
         cur_p = sub_prices[-1]
         s_ema = calculate_ema(sub_prices, short_w)
         l_ema = calculate_ema(sub_prices, long_w)
-        rsi = calculate_rsi(sub_prices)
-        if s_ema > l_ema and rsi < rsi_s and balance > 0:
+        if s_ema > l_ema and balance > 0:
             shares = balance / cur_p
             balance = 0.0
         elif s_ema < l_ema and shares > 0:
@@ -123,33 +109,35 @@ def simulate_strategy(bars, short_w, long_w, rsi_b, rsi_s):
 
 def run_reflection_cycle(symbol):
     global CONFIG
-    print("\n[HERMES REFLECTION CYCLE] 🧠 Evaluated last market window. Optimizing strategy...")
+    print("\n🧠 [HERMES REFLECTION CYCLE] Studying recent history to optimize strategy...")
     bars = get_crypto_bars(symbol, limit=100)
     if not bars or len(bars) < 30:
-        print("⚠️ Insufficient backtest data. Skipping cycle.")
+        print("⚠️ Insufficient data to study. Skipping reflection.")
         return
-    best_p = -99999.0
+    
+    best_profit = -99999.0
     best_cfg = CONFIG.copy()
     
-    # Mathematical adaptation block (Hill-climbing strategy simulation)
+    # AI Simulation Block: Try 35 random strategic adjustments to find the best one
     for _ in range(35):
         t_short = random.randint(3, 10)
         t_long = random.randint(15, 35)
         t_rsi_b = random.randint(30, 45)
         t_rsi_s = random.randint(55, 70)
-        p = simulate_strategy(bars, t_short, t_long, t_rsi_b, t_rsi_s)
-        if p > best_p:
-            best_p = p
+        
+        profit = simulate_strategy(bars, t_short, t_long, t_rsi_b, t_rsi_s)
+        if profit > best_profit:
+            best_profit = profit
             best_cfg = {"short_window": t_short, "long_window": t_long, "rsi_buy": t_rsi_b, "rsi_sell": t_rsi_s}
             
-    print(f"[REFLECTION] Cycle complete. Best potential return found: ${best_p:,.2f}")
+    print(f"📋 Reflection complete. Best simulated result: ${best_profit:,.2f}")
     if best_cfg != CONFIG:
-        print(f"⚙️ Adjusting hyperparameters to maximize future Sharpe ratio:")
-        print(f"   • Short EMA Window: {CONFIG['short_window']} -> {best_cfg['short_window']}")
-        print(f"   • Long EMA Window: {CONFIG['long_window']} -> {best_cfg['long_window']}")
+        print(f"⚙️ Adapting rules to match market conditions:")
+        print(f"   • Short Window: {CONFIG['short_window']} -> {best_cfg['short_window']}")
+        print(f"   • Long Window: {CONFIG['long_window']} -> {best_cfg['long_window']}")
         CONFIG = best_cfg
     else:
-        print("📊 Configuration remains mathematically optimal.")
+        print("📊 Current settings remain optimal. No changes needed.")
     print("--------------------------------------------------\n")
 
 def main():
@@ -170,19 +158,20 @@ def main():
             long_ema = calculate_ema(prices, CONFIG["long_window"])
             rsi = calculate_rsi(prices)
             
-            print(f"🏷️ {asset}: ${current_price:,.2f} | Short EMA: {short_ema:.2f} | Long EMA: {long_ema:.2f} | RSI: {rsi:.1f}")
+            print(f"🏷️ {asset}: ${current_price:,.2f} | Short Window: {CONFIG['short_window']} | Long Window: {CONFIG['long_window']} | RSI: {rsi:.1f}")
             qty = get_current_position(base_url, asset)
             
-            # Smart execution based on adaptive parameters
+            # Use the continuously adapted parameters to trade
             if short_ema > long_ema and rsi < CONFIG["rsi_sell"] and qty == 0:
-                print("🚦 STRATEGY SIGNAL: Bullish momentum detected. Buying...")
+                print("🚦 STRATEGY SIGNAL: Upward momentum detected. Placing BUY order...")
                 place_alpaca_order(base_url, asset, "buy", 0.001)
             elif short_ema < long_ema and qty > 0:
-                print("🚦 STRATEGY SIGNAL: Bearish trend reversal. Selling...")
+                print("🚦 STRATEGY SIGNAL: Downward trend detected. Placing SELL order...")
                 place_alpaca_order(base_url, asset, "sell", qty)
             else:
-                print("⏳ Status: Market conditions neutral. Holding position.")
+                print("⏳ Status: Conditions neutral. Holding position.")
                 
+        # Trigger the true reflection loop every 15 minutes
         if loop_count % 15 == 0:
             run_reflection_cycle(asset)
             
@@ -194,5 +183,4 @@ if __name__ == "__main__":
         os.chdir('/app')
     except Exception:
         pass
-    main()
-   
+    main()   
