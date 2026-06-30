@@ -3,16 +3,18 @@ import time
 import json
 import urllib.request
 import random
+import math
 
-# Core Watchlist including Google and Take-Two (GTA 6 parent company)
+# Watchlist featuring Google and Take-Two (GTA 6 parent company)
 WATCHLIST = ["GOOGL", "TTWO", "AAPL", "MSFT", "NVDA"]
 
-# Global adaptive configuration optimized across the entire portfolio
+# Upgraded configuration focusing on 5-Minute and 15-Minute macroscopic stability
 CONFIG = {
     "short_window": 5,
     "long_window": 20,
-    "stop_loss_pct": 0.02,   # 2% maximum allowed loss per trade
-    "take_profit_pct": 0.04  # 4% target profit target per trade
+    "base_stop_loss": 0.02,   # Baseline 2% stop loss
+    "base_take_profit": 0.04, # Baseline 4% profit target
+    "volume_filter_period": 10
 }
 
 def get_alpaca_headers():
@@ -24,9 +26,9 @@ def get_alpaca_headers():
         "Content-Type": "application/json"
     }
 
-def get_stock_bars(symbols, limit=100):
+def get_stock_bars(symbols, timeframe="5Min", limit=100):
     symbols_str = ",".join(symbols)
-    url = f"https://data.alpaca.markets/v2/stocks/bars?symbols={symbols_str}&timeframe=1Min&limit={limit}"
+    url = f"https://data.alpaca.markets/v2/stocks/bars?symbols={symbols_str}&timeframe={timeframe}&limit={limit}"
     headers = get_alpaca_headers()
     try:
         req = urllib.request.Request(url, headers=headers, method='GET')
@@ -45,6 +47,23 @@ def calculate_ema(prices, window):
     for price in prices[1:]:
         ema = (price * alpha) + (ema * (1 - alpha))
     return ema
+
+def calculate_volatility_multiplier(prices, period=14):
+    """Chaos Meter: Returns a multiplier based on recent price bounces"""
+    if len(prices) < period:
+        return 1.0
+    sub_set = prices[-period:]
+    mean = sum(sub_set) / len(sub_set)
+    variance = sum((x - mean) ** 2 for x in sub_set) / len(sub_set)
+    std_dev = math.sqrt(variance)
+    percentage_volatility = std_dev / mean
+    
+    # Adjust multiplier smoothly based on historical asset movement waves
+    if percentage_volatility > 0.01:
+        return 1.5  # Wild market: give the trade extra room to breathe
+    elif percentage_volatility < 0.002:
+        return 0.8  # Very calm market: tighten up defenses
+    return 1.0
 
 def get_alpaca_position(base_url, symbol):
     url = f"{base_url}/v2/positions/{symbol}"
@@ -73,18 +92,18 @@ def place_stock_order(base_url, symbol, side, qty):
     try:
         req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
         with urllib.request.urlopen(req) as response:
-            print(f"✅ [TRADE EXECUTED] {side.upper()} order filled for {qty} shares of {symbol}!")
+            print(f"✅ [TRADE EXECUTED] {side.upper()} order processed for {qty} shares of {symbol}!")
             return True
     except Exception as e:
-        print(f"❌ [ORDER ERROR] Failed to execute {side} order for {symbol}: {e}")
+        print(f"❌ [ORDER ERROR] Execution blocked for {symbol}: {e}")
         return False
 
-def simulate_portfolio_strategy(all_bars, short_w, long_w, sl_pct, tp_pct):
+def simulate_smart_strategy(all_bars, short_w, long_w, sl_base, tp_base):
     total_simulated_profit = 0.0
-    
     for symbol in WATCHLIST:
         bars = all_bars.get(symbol, [])
         prices = [float(b['c']) for b in bars]
+        volumes = [float(b['v']) for b in bars]
         if len(prices) < long_w:
             continue
             
@@ -94,18 +113,28 @@ def simulate_portfolio_strategy(all_bars, short_w, long_w, sl_pct, tp_pct):
         
         for i in range(long_w, len(prices)):
             sub_prices = prices[:i+1]
+            sub_volumes = volumes[:i+1]
             cur_p = sub_prices[-1]
+            
             s_ema = calculate_ema(sub_prices, short_w)
             l_ema = calculate_ema(sub_prices, long_w)
             
-            # Risk Mitigation evaluation inside backtests
+            # Smart Volume Filter
+            avg_volume = sum(sub_volumes[-10:]) / 10
+            high_volume = sub_volumes[-1] > avg_volume
+            
+            # Dynamic Volatility adjustments
+            vol_mult = calculate_volatility_multiplier(sub_prices)
+            sl_dynamic = sl_base * vol_mult
+            tp_dynamic = tp_base * vol_mult
+            
             if shares > 0:
-                if cur_p <= entry_p * (1 - sl_pct) or cur_p >= entry_p * (1 + tp_pct):
+                if cur_p <= entry_p * (1 - sl_dynamic) or cur_p >= entry_p * (1 + tp_dynamic):
                     balance = shares * cur_p
                     shares = 0.0
                     continue
             
-            if s_ema > l_ema and balance > 0:
+            if s_ema > l_ema and high_volume and balance > 0:
                 shares = balance / cur_p
                 entry_p = cur_p
                 balance = 0.0
@@ -115,58 +144,58 @@ def simulate_portfolio_strategy(all_bars, short_w, long_w, sl_pct, tp_pct):
                 
         profit = balance + (shares * prices[-1]) - 2000.0
         total_simulated_profit += profit
-        
     return total_simulated_profit
 
-def run_portfolio_reflection_cycle():
+def run_macro_reflection_cycle():
     global CONFIG
-    print("\n🧠 [HERMES PORTFOLIO REFLECTION CYCLE] Optimizing thresholds across all target stock assets...")
-    all_bars = get_stock_bars(WATCHLIST, limit=100)
+    print("\n🧠 [HERMES MACRO REFLECTION CYCLE] Studying 15-Minute trends to optimize portfolio filters...")
+    # Pulling larger 15-minute trends to eliminate short-term noisy glitches
+    all_bars = get_stock_bars(WATCHLIST, timeframe="15Min", limit=100)
     if not all_bars:
-        print("⚠️ Insufficient multi-asset market data. Delaying reflection cycle.")
+        print("⚠️ Insufficient historical data blocks. Delaying optimization.")
         return
         
     best_profit = -99999.0
     best_cfg = CONFIG.copy()
     
-    # 35-pass Machine Learning hyperparameter mutation block
     for _ in range(35):
         t_short = random.randint(3, 10)
         t_long = random.randint(15, 35)
-        t_sl = random.choice([0.01, 0.015, 0.02, 0.025, 0.03])
-        t_tp = random.choice([0.03, 0.04, 0.05, 0.06, 0.08])
+        t_sl = random.choice([0.015, 0.02, 0.025, 0.03])
+        t_tp = random.choice([0.03, 0.04, 0.05, 0.06])
         
-        sim_profit = simulate_portfolio_strategy(all_bars, t_short, t_long, t_sl, t_tp)
+        sim_profit = simulate_smart_strategy(all_bars, t_short, t_long, t_sl, t_tp)
         if sim_profit > best_profit:
             best_profit = sim_profit
             best_cfg = {
                 "short_window": t_short,
                 "long_window": t_long,
-                "stop_loss_pct": t_sl,
-                "take_profit_pct": t_tp
+                "base_stop_loss": t_sl,
+                "base_take_profit": t_tp,
+                "volume_filter_period": 10
             }
             
-    print(f"📋 Portfolio Evaluation Complete. Best multi-stock optimization payout: ${best_profit:,.2f}")
+    print(f"📋 Macro Evaluation Complete. Optimal target yield simulated: ${best_profit:,.2f}")
     if best_cfg != CONFIG:
-        print(f"⚙️ Adapting execution parameters globally across all tracking systems:")
-        print(f"   • EMA Fast/Slow: {CONFIG['short_window']}/{CONFIG['long_window']} -> {best_cfg['short_window']}/{best_cfg['long_window']}")
-        print(f"   • Stop-Loss: {CONFIG['stop_loss_pct']*100}% -> {best_cfg['stop_loss_pct']*100}%")
-        print(f"   • Take-Profit: {CONFIG['take_profit_pct']*100}% -> {best_cfg['take_profit_pct']*100}%")
+        print(f"⚙️ Upgrading tracking algorithms globally:")
+        print(f"   • Trend EMAs: {CONFIG['short_window']}/{CONFIG['long_window']} -> {best_cfg['short_window']}/{best_cfg['long_window']}")
+        print(f"   • Baseline Risk Guard: Stop-Loss {best_cfg['base_stop_loss']*100}% | Take-Profit {best_cfg['base_take_profit']*100}%")
         CONFIG = best_cfg
     else:
-        print("📊 Current portfolio settings are performing optimally.")
+        print("📊 Core configurations are operating at maximum market efficiency.")
     print("--------------------------------------------------\n")
 
 def main():
     base_url = os.environ.get("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
-    print("🚀 Real Autonomous Multi-Asset Stock Optimization Engine Online!")
-    print(f"📊 Live Watchlist Scanning: {', '.join(WATCHLIST)}")
+    print("🚀 Real Autonomous Noise-Filtered Stock Optimization Engine Online!")
+    print(f"📊 Live Smart Scanning Activated For: {', '.join(WATCHLIST)}")
     print("--------------------------------------------------")
     
     loop_count = 0
     while True:
         loop_count += 1
-        all_bars = get_stock_bars(WATCHLIST, limit=50)
+        # Main loop switched to stable 5-Minute blocks to avoid 1-minute random whipsaws
+        all_bars = get_stock_bars(WATCHLIST, timeframe="5Min", limit=60)
         
         for symbol in WATCHLIST:
             bars = all_bars.get(symbol, [])
@@ -174,45 +203,57 @@ def main():
                 continue
                 
             prices = [float(b['c']) for b in bars]
+            volumes = [float(b['v']) for b in bars]
             current_price = prices[-1]
+            current_volume = volumes[-1]
             
             short_ema = calculate_ema(prices, CONFIG["short_window"])
             long_ema = calculate_ema(prices, CONFIG["long_window"])
             
-            # Fetch dynamic position state directly from Alpaca exchange infrastructure
+            # Volume Crowd Filter calculation
+            recent_avg_volume = sum(volumes[-CONFIG["volume_filter_period"]:]) / CONFIG["volume_filter_period"]
+            volume_confirmed = current_volume > recent_avg_volume
+            
+            # Volatility Chaos Meter adjustment
+            vol_multiplier = calculate_volatility_multiplier(prices)
+            current_sl = CONFIG["base_stop_loss"] * vol_multiplier
+            current_tp = CONFIG["base_take_profit"] * vol_multiplier
+            
             position = get_alpaca_position(base_url, symbol)
             qty = position["qty"]
             entry_price = position["entry_price"]
             
-            print(f"🏷️ {symbol}: ${current_price:,.2f} | Short/Long EMA: {short_ema:.2f}/{long_ema:.2f}")
+            vol_status = "HIGH ⚠️ (Widening Safety Nets)" if vol_multiplier > 1.0 else "CALM ✅ (Tight Shields)"
+            print(f"🏷️ {symbol}: ${current_price:,.2f} | Volatility: {vol_status} | Volume Confirmed: {volume_confirmed}")
             
             # --- RISK MANAGEMENT LAYER ---
             if qty > 0:
-                stop_price = entry_price * (1 - CONFIG["stop_loss_pct"])
-                profit_price = entry_price * (1 + CONFIG["take_profit_pct"])
+                stop_price = entry_price * (1 - current_sl)
+                profit_price = entry_price * (1 + current_tp)
                 
                 if current_price <= stop_price:
-                    print(f"🚨 [STOP LOSS TRIGGERED] {symbol} dropped below safety limit (${stop_price:,.2f}). Liquidation active...")
+                    print(f"🚨 [DYNAMIC STOP LOSS] Liquidating {symbol} at ${current_price:,.2f} to prevent capital leakage.")
                     place_stock_order(base_url, symbol, "sell", qty)
                     continue
                 elif current_price >= profit_price:
-                    print(f"💰 [TAKE PROFIT TRIGGERED] {symbol} hit profit goal (${profit_price:,.2f}). Locking rewards...")
+                    print(f"💰 [DYNAMIC TAKE PROFIT] Claiming rewards for {symbol} at ${current_price:,.2f} before trend drops.")
                     place_stock_order(base_url, symbol, "sell", qty)
                     continue
             
-            # --- MOMENTUM SCANNER LAYER ---
-            if short_ema > long_ema and qty == 0:
-                print(f"🚦 MOMENTUM SIGNAL: {symbol} breaking out upward. Initiating buy routine...")
-                place_stock_order(base_url, symbol, "buy", 1)  # Buys 1 baseline share of stock
+            # --- INTELLIGENT MOMENTUM SCANNER ---
+            if short_ema > long_ema and volume_confirmed and qty == 0:
+                print(f"🚦 STRATEGY BREAKOUT: {symbol} surging upward with crowd support. Buying 1 share...")
+                place_stock_order(base_url, symbol, "buy", 1)
             elif short_ema < long_ema and qty > 0:
-                print(f"🚦 MOMENTUM SIGNAL: {symbol} trend reversing downward. Releasing holdings...")
+                print(f"🚦 STRATEGY REVERSAL: {symbol} momentum exhausting. Selling position...")
                 place_stock_order(base_url, symbol, "sell", qty)
                 
-        if loop_count % 15 == 0:
-            run_portfolio_reflection_cycle()
+        # Run reflection every 30 loops (every 2.5 hours on 5-min intervals) to prioritize macro stability
+        if loop_count % 30 == 0:
+            run_macro_reflection_cycle()
             
         print("--------------------------------------------------")
-        time.sleep(60)
+        time.sleep(300) # Check the market smoothly every 5 minutes
 
 if __name__ == "__main__":
     try:
