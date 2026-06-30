@@ -140,7 +140,7 @@ def main():
             # If the probability of an imminent upward swing is greater than 45% and we don't hold shares
             if upward_probability > 0.45 and qty == 0:
                 print(f"🚦 PROBABILITY SIGNAL: High likelihood of upward breakout on {symbol}. Buying 1 share...")
-                place_stock_order(base_url, symbol, "buy", 1)
+                place_stock_order(base_url, symbol, "buy", 2)
             # If the mathematical matrix shifts and shows less than a 20% chance of staying up
             elif upward_probability < 0.20 and qty > 0:
                 print(f"🚦 PROBABILITY SIGNAL: Directional edge decayed for {symbol}. Releasing holdings...")
