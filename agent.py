@@ -4,12 +4,15 @@ import json
 import urllib.request
 import random
 
-# Global strategy parameters that the bot will automatically tune over time
+# Core Watchlist including Google and Take-Two (GTA 6 parent company)
+WATCHLIST = ["GOOGL", "TTWO", "AAPL", "MSFT", "NVDA"]
+
+# Global adaptive configuration optimized across the entire portfolio
 CONFIG = {
     "short_window": 5,
     "long_window": 20,
-    "rsi_buy": 35,
-    "rsi_sell": 65
+    "stop_loss_pct": 0.02,   # 2% maximum allowed loss per trade
+    "take_profit_pct": 0.04  # 4% target profit target per trade
 }
 
 def get_alpaca_headers():
@@ -21,18 +24,18 @@ def get_alpaca_headers():
         "Content-Type": "application/json"
     }
 
-def get_crypto_bars(symbol, limit=100):
-    data_symbol = "BTC/USD" if "BTC" in symbol else symbol
-    url = f"https://data.alpaca.markets/v1beta3/crypto/us/bars?symbols={data_symbol}&timeframe=1Min&limit={limit}"
+def get_stock_bars(symbols, limit=100):
+    symbols_str = ",".join(symbols)
+    url = f"https://data.alpaca.markets/v2/stocks/bars?symbols={symbols_str}&timeframe=1Min&limit={limit}"
     headers = get_alpaca_headers()
     try:
         req = urllib.request.Request(url, headers=headers, method='GET')
         with urllib.request.urlopen(req) as response:
             res_data = json.loads(response.read().decode('utf-8'))
-            return res_data.get("bars", {}).get(data_symbol, [])
+            return res_data.get("bars", {})
     except Exception as e:
-        print(f"⚠️ Bars Fetch Error: {e}")
-        return []
+        print(f"⚠️ Stock Market Data Fetch Error: {e}")
+        return {}
 
 def calculate_ema(prices, window):
     if len(prices) < window:
@@ -43,33 +46,21 @@ def calculate_ema(prices, window):
         ema = (price * alpha) + (ema * (1 - alpha))
     return ema
 
-def calculate_rsi(prices, period=14):
-    if len(prices) < period + 1:
-        return 50
-    gains, losses = 0, 0
-    for i in range(1, period + 1):
-        diff = prices[-i] - prices[-i-1]
-        if diff > 0:
-            gains += diff
-        else:
-            losses -= diff
-    if losses == 0:
-        return 100
-    rs = gains / losses
-    return 100 - (100 / (1 + rs))
-
-def get_current_position(base_url, symbol):
+def get_alpaca_position(base_url, symbol):
     url = f"{base_url}/v2/positions/{symbol}"
     headers = get_alpaca_headers()
     try:
         req = urllib.request.Request(url, headers=headers, method='GET')
         with urllib.request.urlopen(req) as response:
             res_data = json.loads(response.read().decode('utf-8'))
-            return float(res_data["qty"])
+            return {
+                "qty": float(res_data["qty"]),
+                "entry_price": float(res_data["avg_entry_price"])
+            }
     except Exception:
-        return 0.0
+        return {"qty": 0.0, "entry_price": 0.0}
 
-def place_alpaca_order(base_url, symbol, side, qty):
+def place_stock_order(base_url, symbol, side, qty):
     url = f"{base_url}/v2/orders"
     headers = get_alpaca_headers()
     data = {
@@ -77,103 +68,148 @@ def place_alpaca_order(base_url, symbol, side, qty):
         "qty": str(qty),
         "side": side,
         "type": "market",
-        "time_in_force": "gtc"
+        "time_in_force": "day"
     }
     try:
         req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
         with urllib.request.urlopen(req) as response:
-            print(f"✅ [TRADE EXECUTED] Successfully placed {side} order for {qty} {symbol}!")
+            print(f"✅ [TRADE EXECUTED] {side.upper()} order filled for {qty} shares of {symbol}!")
             return True
     except Exception as e:
-        print(f"❌ [ORDER ERROR] Failed to place {side} order: {e}")
+        print(f"❌ [ORDER ERROR] Failed to execute {side} order for {symbol}: {e}")
         return False
 
-def simulate_strategy(bars, short_w, long_w, rsi_b, rsi_s):
-    prices = [float(b['c']) for b in bars]
-    if len(prices) < long_w:
-        return 0.0
-    balance = 10000.0
-    shares = 0.0
-    for i in range(long_w, len(prices)):
-        sub_prices = prices[:i+1]
-        cur_p = sub_prices[-1]
-        s_ema = calculate_ema(sub_prices, short_w)
-        l_ema = calculate_ema(sub_prices, long_w)
-        if s_ema > l_ema and balance > 0:
-            shares = balance / cur_p
-            balance = 0.0
-        elif s_ema < l_ema and shares > 0:
-            balance = shares * cur_p
-            shares = 0.0
-    return balance + (shares * prices[-1]) - 10000.0
-
-def run_reflection_cycle(symbol):
-    global CONFIG
-    print("\n🧠 [HERMES REFLECTION CYCLE] Studying recent history to optimize strategy...")
-    bars = get_crypto_bars(symbol, limit=100)
-    if not bars or len(bars) < 30:
-        print("⚠️ Insufficient data to study. Skipping reflection.")
-        return
+def simulate_portfolio_strategy(all_bars, short_w, long_w, sl_pct, tp_pct):
+    total_simulated_profit = 0.0
     
+    for symbol in WATCHLIST:
+        bars = all_bars.get(symbol, [])
+        prices = [float(b['c']) for b in bars]
+        if len(prices) < long_w:
+            continue
+            
+        balance = 2000.0
+        shares = 0.0
+        entry_p = 0.0
+        
+        for i in range(long_w, len(prices)):
+            sub_prices = prices[:i+1]
+            cur_p = sub_prices[-1]
+            s_ema = calculate_ema(sub_prices, short_w)
+            l_ema = calculate_ema(sub_prices, long_w)
+            
+            # Risk Mitigation evaluation inside backtests
+            if shares > 0:
+                if cur_p <= entry_p * (1 - sl_pct) or cur_p >= entry_p * (1 + tp_pct):
+                    balance = shares * cur_p
+                    shares = 0.0
+                    continue
+            
+            if s_ema > l_ema and balance > 0:
+                shares = balance / cur_p
+                entry_p = cur_p
+                balance = 0.0
+            elif s_ema < l_ema and shares > 0:
+                balance = shares * cur_p
+                shares = 0.0
+                
+        profit = balance + (shares * prices[-1]) - 2000.0
+        total_simulated_profit += profit
+        
+    return total_simulated_profit
+
+def run_portfolio_reflection_cycle():
+    global CONFIG
+    print("\n🧠 [HERMES PORTFOLIO REFLECTION CYCLE] Optimizing thresholds across all target stock assets...")
+    all_bars = get_stock_bars(WATCHLIST, limit=100)
+    if not all_bars:
+        print("⚠️ Insufficient multi-asset market data. Delaying reflection cycle.")
+        return
+        
     best_profit = -99999.0
     best_cfg = CONFIG.copy()
     
-    # AI Simulation Block: Try 35 random strategic adjustments to find the best one
+    # 35-pass Machine Learning hyperparameter mutation block
     for _ in range(35):
         t_short = random.randint(3, 10)
         t_long = random.randint(15, 35)
-        t_rsi_b = random.randint(30, 45)
-        t_rsi_s = random.randint(55, 70)
+        t_sl = random.choice([0.01, 0.015, 0.02, 0.025, 0.03])
+        t_tp = random.choice([0.03, 0.04, 0.05, 0.06, 0.08])
         
-        profit = simulate_strategy(bars, t_short, t_long, t_rsi_b, t_rsi_s)
-        if profit > best_profit:
-            best_profit = profit
-            best_cfg = {"short_window": t_short, "long_window": t_long, "rsi_buy": t_rsi_b, "rsi_sell": t_rsi_s}
+        sim_profit = simulate_portfolio_strategy(all_bars, t_short, t_long, t_sl, t_tp)
+        if sim_profit > best_profit:
+            best_profit = sim_profit
+            best_cfg = {
+                "short_window": t_short,
+                "long_window": t_long,
+                "stop_loss_pct": t_sl,
+                "take_profit_pct": t_tp
+            }
             
-    print(f"📋 Reflection complete. Best simulated result: ${best_profit:,.2f}")
+    print(f"📋 Portfolio Evaluation Complete. Best multi-stock optimization payout: ${best_profit:,.2f}")
     if best_cfg != CONFIG:
-        print(f"⚙️ Adapting rules to match market conditions:")
-        print(f"   • Short Window: {CONFIG['short_window']} -> {best_cfg['short_window']}")
-        print(f"   • Long Window: {CONFIG['long_window']} -> {best_cfg['long_window']}")
+        print(f"⚙️ Adapting execution parameters globally across all tracking systems:")
+        print(f"   • EMA Fast/Slow: {CONFIG['short_window']}/{CONFIG['long_window']} -> {best_cfg['short_window']}/{best_cfg['long_window']}")
+        print(f"   • Stop-Loss: {CONFIG['stop_loss_pct']*100}% -> {best_cfg['stop_loss_pct']*100}%")
+        print(f"   • Take-Profit: {CONFIG['take_profit_pct']*100}% -> {best_cfg['take_profit_pct']*100}%")
         CONFIG = best_cfg
     else:
-        print("📊 Current settings remain optimal. No changes needed.")
+        print("📊 Current portfolio settings are performing optimally.")
     print("--------------------------------------------------\n")
 
 def main():
-    asset = "BTCUSD"
     base_url = os.environ.get("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
-    print("🚀 Real Autonomous Self-Improving Agent Active!")
-    print(f"📊 Live Tracking: {asset}")
+    print("🚀 Real Autonomous Multi-Asset Stock Optimization Engine Online!")
+    print(f"📊 Live Watchlist Scanning: {', '.join(WATCHLIST)}")
     print("--------------------------------------------------")
     
     loop_count = 0
     while True:
         loop_count += 1
-        bars = get_crypto_bars(asset, limit=50)
-        if bars:
+        all_bars = get_stock_bars(WATCHLIST, limit=50)
+        
+        for symbol in WATCHLIST:
+            bars = all_bars.get(symbol, [])
+            if not bars:
+                continue
+                
             prices = [float(b['c']) for b in bars]
             current_price = prices[-1]
+            
             short_ema = calculate_ema(prices, CONFIG["short_window"])
             long_ema = calculate_ema(prices, CONFIG["long_window"])
-            rsi = calculate_rsi(prices)
             
-            print(f"🏷️ {asset}: ${current_price:,.2f} | Short Window: {CONFIG['short_window']} | Long Window: {CONFIG['long_window']} | RSI: {rsi:.1f}")
-            qty = get_current_position(base_url, asset)
+            # Fetch dynamic position state directly from Alpaca exchange infrastructure
+            position = get_alpaca_position(base_url, symbol)
+            qty = position["qty"]
+            entry_price = position["entry_price"]
             
-            # Use the continuously adapted parameters to trade
-            if short_ema > long_ema and rsi < CONFIG["rsi_sell"] and qty == 0:
-                print("🚦 STRATEGY SIGNAL: Upward momentum detected. Placing BUY order...")
-                place_alpaca_order(base_url, asset, "buy", 0.001)
-            elif short_ema < long_ema and qty > 0:
-                print("🚦 STRATEGY SIGNAL: Downward trend detected. Placing SELL order...")
-                place_alpaca_order(base_url, asset, "sell", qty)
-            else:
-                print("⏳ Status: Conditions neutral. Holding position.")
+            print(f"🏷️ {symbol}: ${current_price:,.2f} | Short/Long EMA: {short_ema:.2f}/{long_ema:.2f}")
+            
+            # --- RISK MANAGEMENT LAYER ---
+            if qty > 0:
+                stop_price = entry_price * (1 - CONFIG["stop_loss_pct"])
+                profit_price = entry_price * (1 + CONFIG["take_profit_pct"])
                 
-        # Trigger the true reflection loop every 15 minutes
+                if current_price <= stop_price:
+                    print(f"🚨 [STOP LOSS TRIGGERED] {symbol} dropped below safety limit (${stop_price:,.2f}). Liquidation active...")
+                    place_stock_order(base_url, symbol, "sell", qty)
+                    continue
+                elif current_price >= profit_price:
+                    print(f"💰 [TAKE PROFIT TRIGGERED] {symbol} hit profit goal (${profit_price:,.2f}). Locking rewards...")
+                    place_stock_order(base_url, symbol, "sell", qty)
+                    continue
+            
+            # --- MOMENTUM SCANNER LAYER ---
+            if short_ema > long_ema and qty == 0:
+                print(f"🚦 MOMENTUM SIGNAL: {symbol} breaking out upward. Initiating buy routine...")
+                place_stock_order(base_url, symbol, "buy", 1)  # Buys 1 baseline share of stock
+            elif short_ema < long_ema and qty > 0:
+                print(f"🚦 MOMENTUM SIGNAL: {symbol} trend reversing downward. Releasing holdings...")
+                place_stock_order(base_url, symbol, "sell", qty)
+                
         if loop_count % 15 == 0:
-            run_reflection_cycle(asset)
+            run_portfolio_reflection_cycle()
             
         print("--------------------------------------------------")
         time.sleep(60)
@@ -183,4 +219,5 @@ if __name__ == "__main__":
         os.chdir('/app')
     except Exception:
         pass
-    main()   
+    main()
+
