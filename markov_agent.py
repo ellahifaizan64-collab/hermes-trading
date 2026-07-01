@@ -5,7 +5,7 @@ import urllib.request
 import random
 
 # Core Watchlist matching your portfolio tracking structure
-WATCHLIST = ["GOOGL", "TTWO", "AAPL", "MSFT", "NVDA"]
+WATCHLIST = ["GOOGL", "TTWO", "AAPL", "MSFT", "NVDA", "Bitcoin"]
 
 # Markov Probability configurations
 CONFIG = {
