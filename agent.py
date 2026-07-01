@@ -6,8 +6,7 @@ import random
 import math
 
 # Watchlist featuring Google and Take-Two (GTA 6 parent company)
-WATCHLIST = ["GOOGL", "TTWO", "AAPL", "MSFT", "NVDA"]
-
+WATCHLIST = ["GOOGL", "AAPL", "MSFT"]
 # Upgraded configuration focusing on 5-Minute and 15-Minute macroscopic stability
 CONFIG = {
     "short_window": 5,
