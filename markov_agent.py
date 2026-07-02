@@ -26,7 +26,6 @@ def get_alpaca_headers():
 
 def get_stock_bars(symbols, limit=120):
     symbols_str = ",".join(symbols)
-    # Upgraded to 5Min to capture healthy volume on the free IEX tier
     url = f"https://data.alpaca.markets/v2/stocks/bars?symbols={symbols_str}&timeframe=5Min&limit={limit}"
     headers = get_alpaca_headers()
     try:
@@ -49,6 +48,18 @@ def get_alpaca_position(base_url, symbol):
     except Exception:
         return {"qty": 0.0, "entry_price": 0.0}
 
+def has_pending_orders(base_url, symbol):
+    """Safety Shield: Checks if there are already unexecuted orders waiting in the queue"""
+    url = f"{base_url}/v2/orders?status=open&symbols={symbol}"
+    headers = get_alpaca_headers()
+    try:
+        req = urllib.request.Request(url, headers=headers, method='GET')
+        with urllib.request.urlopen(req) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            return len(res_data) > 0
+    except Exception:
+        return False
+
 def place_stock_order(base_url, symbol, side, qty):
     url = f"{base_url}/v2/orders"
     headers = get_alpaca_headers()
@@ -66,9 +77,8 @@ def compute_markov_signals(bars):
     """Calculates state transitions and returns the probability of an upward move"""
     prices = [float(b['c']) for b in bars]
     if len(prices) < 2:
-        return 1  # Default to Neutral state
+        return 1  
         
-    # Map price shifts to states (0=Down, 1=Flat, 2=Up)
     states = []
     for i in range(1, len(prices)):
         change = (prices[i] - prices[i-1]) / prices[i-1]
@@ -82,21 +92,18 @@ def compute_markov_signals(bars):
     if len(states) < 10:
         return 1
         
-    # Build the 3x3 Transition Matrix count grid
     matrix = {0: {0:0, 1:0, 2:0}, 1: {0:0, 1:0, 2:0}, 2: {0:0, 1:0, 2:0}}
     for i in range(len(states) - 1):
         current_s = states[i]
         next_s = states[i+1]
         matrix[current_s][next_s] += 1
         
-    # Analyze transitions relative to the most recent active state
     last_state = states[-1]
     total_transitions_from_last = sum(matrix[last_state].values())
     
     if total_transitions_from_last == 0:
         return 1  
         
-    # Return probability of transitioning into a Bullish State (2)
     prob_of_upward_move = matrix[last_state][2] / total_transitions_from_last
     return prob_of_upward_move
 
@@ -139,16 +146,16 @@ def main():
                     continue
             
             # --- MARKOV PROBABILITY EXECUTION CORE ---
-            # Automatically buys 2 shares based on our visual confirmation trick
-            if upward_probability > 0.45 and qty == 0:
+            # Safety shield added: 'and not has_pending_orders(...)' prevents duplicate spamming
+            if upward_probability > 0.45 and qty == 0 and not has_pending_orders(base_url, symbol):
                 print(f"🚦 PROBABILITY SIGNAL: High likelihood of upward breakout on {symbol}. Buying 2 shares...")
                 place_stock_order(base_url, symbol, "buy", 2)
-            elif upward_probability < 0.20 and qty > 0:
+            elif upward_probability < 0.20 and qty > 0 and not has_pending_orders(base_url, symbol):
                 print(f"🚦 PROBABILITY SIGNAL: Directional edge decayed for {symbol}. Releasing holdings...")
                 place_stock_order(base_url, symbol, "sell", qty)
                 
         print("--------------------------------------------------")
-        time.sleep(300)  # Re-evaluate probability states every 5 minutes to match new bars
+        time.sleep(300)  # Re-evaluate probability states every 5 minutes
 
 if __name__ == "__main__":
     try:
