@@ -4,15 +4,15 @@ import json
 import urllib.request
 import random
 
-# Core Watchlist matching your portfolio tracking structure
+# Core Watchlist - Separate playground from your trend bot
 WATCHLIST = ["TTWO", "NVDA", "TSLA"]
 
-# Markov Probability configurations
+# Markov Probability configurations optimized for 5-Minute intervals
 CONFIG = {
     "stop_loss_pct": 0.02,
     "take_profit_pct": 0.04,
-    "state_threshold": 0.0003,  # 0.03% change threshold to define an Up/Down move
-    "lookback_bars": 100         # Amount of history used to calculate probabilities
+    "state_threshold": 0.0006,  # Slightly wider threshold for 5-minute moves
+    "lookback_bars": 100         # Uses last 100 5-minute bars for the matrix
 }
 
 def get_alpaca_headers():
@@ -26,7 +26,8 @@ def get_alpaca_headers():
 
 def get_stock_bars(symbols, limit=120):
     symbols_str = ",".join(symbols)
-    url = f"https://data.alpaca.markets/v2/stocks/bars?symbols={symbols_str}&timeframe=1Min&limit={limit}"
+    # Upgraded to 5Min to capture healthy volume on the free IEX tier
+    url = f"https://data.alpaca.markets/v2/stocks/bars?symbols={symbols_str}&timeframe=5Min&limit={limit}"
     headers = get_alpaca_headers()
     try:
         req = urllib.request.Request(url, headers=headers, method='GET')
@@ -67,7 +68,7 @@ def compute_markov_signals(bars):
     if len(prices) < 2:
         return 1  # Default to Neutral state
         
-    # Step 1: Calculate percent changes and map to states (0=Down, 1=Flat, 2=Up)
+    # Map price shifts to states (0=Down, 1=Flat, 2=Up)
     states = []
     for i in range(1, len(prices)):
         change = (prices[i] - prices[i-1]) / prices[i-1]
@@ -81,19 +82,19 @@ def compute_markov_signals(bars):
     if len(states) < 10:
         return 1
         
-    # Step 2: Build the 3x3 Transition Matrix count grid
+    # Build the 3x3 Transition Matrix count grid
     matrix = {0: {0:0, 1:0, 2:0}, 1: {0:0, 1:0, 2:0}, 2: {0:0, 1:0, 2:0}}
     for i in range(len(states) - 1):
         current_s = states[i]
         next_s = states[i+1]
         matrix[current_s][next_s] += 1
         
-    # Step 3: Analyze transitions relative to the most recent active state
+    # Analyze transitions relative to the most recent active state
     last_state = states[-1]
     total_transitions_from_last = sum(matrix[last_state].values())
     
     if total_transitions_from_last == 0:
-        return 1  # Standard Neutral fallback
+        return 1  
         
     # Return probability of transitioning into a Bullish State (2)
     prob_of_upward_move = matrix[last_state][2] / total_transitions_from_last
@@ -101,7 +102,7 @@ def compute_markov_signals(bars):
 
 def main():
     base_url = os.environ.get("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
-    print("🚀 Markov 2.0 Probability Forecast Engine Active!")
+    print("🚀 Upgraded Markov 2.0 Probability Engine Active (5-Minute Windows)!")
     print(f"📊 Tracking Matrix Shifts For: {', '.join(WATCHLIST)}")
     print("--------------------------------------------------")
     
@@ -111,6 +112,7 @@ def main():
         for symbol in WATCHLIST:
             bars = all_bars.get(symbol, [])
             if not bars:
+                print(f"⏳ Waiting for sufficient IEX volume data for {symbol}...")
                 continue
                 
             current_price = float(bars[-1]['c'])
@@ -137,17 +139,16 @@ def main():
                     continue
             
             # --- MARKOV PROBABILITY EXECUTION CORE ---
-            # If the probability of an imminent upward swing is greater than 45% and we don't hold shares
+            # Automatically buys 2 shares based on our visual confirmation trick
             if upward_probability > 0.45 and qty == 0:
-                print(f"🚦 PROBABILITY SIGNAL: High likelihood of upward breakout on {symbol}. Buying 1 share...")
+                print(f"🚦 PROBABILITY SIGNAL: High likelihood of upward breakout on {symbol}. Buying 2 shares...")
                 place_stock_order(base_url, symbol, "buy", 2)
-            # If the mathematical matrix shifts and shows less than a 20% chance of staying up
             elif upward_probability < 0.20 and qty > 0:
                 print(f"🚦 PROBABILITY SIGNAL: Directional edge decayed for {symbol}. Releasing holdings...")
                 place_stock_order(base_url, symbol, "sell", qty)
                 
         print("--------------------------------------------------")
-        time.sleep(60)  # Re-evaluate probability states every minute
+        time.sleep(300)  # Re-evaluate probability states every 5 minutes to match new bars
 
 if __name__ == "__main__":
     try:
