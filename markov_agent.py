@@ -38,15 +38,20 @@ def get_stock_bars(symbols, limit=120):
         return {}
 
 def get_alpaca_position(base_url, symbol):
+    """Upgraded to safely extract the actual live market price directly from your portfolio"""
     url = f"{base_url}/v2/positions/{symbol}"
     headers = get_alpaca_headers()
     try:
         req = urllib.request.Request(url, headers=headers, method='GET')
         with urllib.request.urlopen(req) as response:
             res_data = json.loads(response.read().decode('utf-8'))
-            return {"qty": float(res_data["qty"]), "entry_price": float(res_data["avg_entry_price"])}
+            return {
+                "qty": float(res_data["qty"]), 
+                "entry_price": float(res_data["avg_entry_price"]),
+                "current_price": float(res_data["current_price"])
+            }
     except Exception:
-        return {"qty": 0.0, "entry_price": 0.0}
+        return {"qty": 0.0, "entry_price": 0.0, "current_price": 0.0}
 
 def has_pending_orders(base_url, symbol):
     """Safety Shield: Checks if there are already unexecuted orders waiting in the queue"""
@@ -109,7 +114,7 @@ def compute_markov_signals(bars):
 
 def main():
     base_url = os.environ.get("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
-    print("🚀 Upgraded Markov 2.0 Probability Engine Active (5-Minute Windows)!")
+    print("🚀 Upgraded Markov 3.0 Position-First Engine Active!")
     print(f"📊 Tracking Matrix Shifts For: {', '.join(WATCHLIST)}")
     print("--------------------------------------------------")
     
@@ -117,36 +122,40 @@ def main():
         all_bars = get_stock_bars(WATCHLIST, limit=CONFIG["lookback_bars"])
         
         for symbol in WATCHLIST:
-            bars = all_bars.get(symbol, [])
-            if not bars:
-                print(f"⏳ Waiting for sufficient IEX volume data for {symbol}...")
-                continue
-                
-            current_price = float(bars[-1]['c'])
-            upward_probability = compute_markov_signals(bars)
-            
+            # STEP 1: Always check your live account positions and raw prices first
             position = get_alpaca_position(base_url, symbol)
             qty = position["qty"]
             entry_price = position["entry_price"]
+            live_price = position["current_price"]
             
-            print(f"🔮 {symbol}: ${current_price:,.2f} | Next-Bar Bullish Probability: {upward_probability*100:.1f}%")
-            
-            # --- PROTECTIVE RISK LAYER ---
-            if qty > 0:
+            # STEP 2: RUN PROTECTIVE RISK LAYER FIRST (Independent of data stream availability)
+            if qty > 0 and live_price > 0:
                 stop_price = entry_price * (1 - CONFIG["stop_loss_pct"])
                 profit_price = entry_price * (1 + CONFIG["take_profit_pct"])
                 
-                if current_price <= stop_price:
-                    print(f"🚨 [MARKOV STOP] Liquidation triggered for {symbol} at ${current_price:,.2f}")
+                if live_price <= stop_price:
+                    print(f"🚨 [MARKOV STOP] Liquidation triggered for {symbol} at ${live_price:,.2f} (Entry: ${entry_price:.2f})")
                     place_stock_order(base_url, symbol, "sell", qty)
                     continue
-                elif current_price >= profit_price:
-                    print(f"💰 [MARKOV PROFIT] Milestone hit for {symbol} at ${current_price:,.2f}")
+                elif live_price >= profit_price:
+                    print(f"💰 [MARKOV PROFIT] Milestone hit for {symbol} at ${live_price:,.2f} (Entry: ${entry_price:.2f})")
                     place_stock_order(base_url, symbol, "sell", qty)
                     continue
             
+            # STEP 3: Now look at chart data for building the prediction matrix
+            bars = all_bars.get(symbol, [])
+            if not bars:
+                # If we don't own it and there's no data, skip calculation safely
+                if qty == 0:
+                    print(f"⏳ Waiting for sufficient IEX volume data to calculate matrix for {symbol}...")
+                continue
+                
+            display_price = live_price if live_price > 0 else float(bars[-1]['c'])
+            upward_probability = compute_markov_signals(bars)
+            
+            print(f"🔮 {symbol}: ${display_price:,.2f} | Next-Bar Bullish Probability: {upward_probability*100:.1f}%")
+            
             # --- MARKOV PROBABILITY EXECUTION CORE ---
-            # Safety shield added: 'and not has_pending_orders(...)' prevents duplicate spamming
             if upward_probability > 0.45 and qty == 0 and not has_pending_orders(base_url, symbol):
                 print(f"🚦 PROBABILITY SIGNAL: High likelihood of upward breakout on {symbol}. Buying 2 shares...")
                 place_stock_order(base_url, symbol, "buy", 2)
@@ -155,7 +164,7 @@ def main():
                 place_stock_order(base_url, symbol, "sell", qty)
                 
         print("--------------------------------------------------")
-        time.sleep(300)  # Re-evaluate probability states every 5 minutes
+        time.sleep(300)  # Re-evaluate every 5 minutes
 
 if __name__ == "__main__":
     try:
