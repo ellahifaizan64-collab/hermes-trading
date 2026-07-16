@@ -2,6 +2,41 @@ import os
 import time
 import json
 import urllib.request
+import requests
+
+def push_trade_to_pilotx(bot_name, ticker, action, price, qty, signal_strength=1.0):
+    """
+    Sends executed trade logs to your Base44 PilotX dashboard in real-time.
+    """
+    webhook_url = os.environ.get("BASE44_WEBHOOK_URL")
+    webhook_secret = os.environ.get("WEBHOOK_SECRET")
+    
+    if not webhook_url or not webhook_secret:
+        print("⚠️ Dashboard webhook skipped: BASE44_WEBHOOK_URL or WEBHOOK_SECRET is missing.")
+        return
+        
+    headers = {
+        "Content-Type": "application/json",
+        "X-Webhook-Key": webhook_secret
+    }
+    
+    payload = {
+        "bot_name": bot_name,
+        "ticker": ticker,
+        "action": action.upper(),  # Must be 'BUY' or 'SELL'
+        "price": float(price),
+        "qty": float(qty),
+        "signal_strength": float(signal_strength)
+    }
+    
+    try:
+        response = requests.post(webhook_url, json=payload, headers=headers, timeout=10)
+        if response.status_code in [200, 201]:
+            print(f"✅ Successfully sent trade to PilotX: {action} {qty} shares of {ticker}")
+        else:
+            print(f"❌ Dashboard error ({response.status_code}): {response.text}")
+    except Exception as e:
+        print(f"❌ Failed to connect to PilotX webhook: {str(e)}")
 
 # Core Watchlist - Separate playground from your markov bot
 WATCHLIST = ["GOOGL", "AAPL", "MSFT"]
@@ -118,11 +153,13 @@ def main():
                 
                 if live_price <= stop_price:
                     print(f"🚨 [TREND STOP] Stop-loss triggered for {symbol} at ${live_price:,.2f}")
-                    place_stock_order(base_url, symbol, "sell", qty)
+                    if place_stock_order(base_url, symbol, "sell", qty):
+                        push_trade_to_pilotx(bot_name="Breakout Bot", ticker=symbol, action="SELL", price=live_price, qty=qty)
                     continue
                 elif live_price >= profit_price:
                     print(f"💰 [TREND PROFIT] Profit milestone hit for {symbol} at ${live_price:,.2f}")
-                    place_stock_order(base_url, symbol, "sell", qty)
+                    if place_stock_order(base_url, symbol, "sell", qty):
+                        push_trade_to_pilotx(bot_name="Breakout Bot", ticker=symbol, action="SELL", price=live_price, qty=qty)
                     continue
             
             bars = all_bars.get(symbol, [])
@@ -136,10 +173,12 @@ def main():
             # CORE EXECUTION LAYER (with Pending Order Shield applied)
             if signal == "buy" and qty == 0 and not has_pending_orders(base_url, symbol):
                 print(f"🚦 TREND SIGNAL: Volume breakout detected on {symbol}. Ordering 1 share...")
-                place_stock_order(base_url, symbol, "buy", 1)
+                if place_stock_order(base_url, symbol, "buy", 1):
+                    push_trade_to_pilotx(bot_name="Breakout Bot", ticker=symbol, action="BUY", price=display_price, qty=1)
             elif signal == "sell" and qty > 0 and not has_pending_orders(base_url, symbol):
                 print(f"🚦 TREND SIGNAL: Momentum reversal detected on {symbol}. Clearing holdings...")
-                place_stock_order(base_url, symbol, "sell", qty)
+                if place_stock_order(base_url, symbol, "sell", qty):
+                    push_trade_to_pilotx(bot_name="Breakout Bot", ticker=symbol, action="SELL", price=display_price, qty=qty)
                 
         print("--------------------------------------------------")
         time.sleep(300)  # Check trend frames every 5 minutes
@@ -150,4 +189,3 @@ if __name__ == "__main__":
     except Exception:
         pass
     main()
-
